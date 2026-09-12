@@ -20,7 +20,7 @@ async function getAccessToken() {
     grant_type: 'client_credentials',
     client_id: process.env.NINJA_CLIENT_ID,
     client_secret: process.env.NINJA_CLIENT_SECRET,
-    scope: 'management'
+    scope: 'monitoring management control'
   });
 
   const response = await fetch(tokenUrl, {
