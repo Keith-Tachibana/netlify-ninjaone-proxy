@@ -38,8 +38,11 @@ Environment variables** and add the same five values (`NINJA_CLIENT_ID`,
 ## Deploy
 
 ```
-netlify deploy --prod
+netlify deploy --prod --no-build
 ```
+
+`--no-build` skips Netlify's default build step, which is correct here —
+there's nothing to compile or bundle, just the function to upload.
 
 Or connect this folder to a Git repo in the Netlify UI for automatic
 deploys on every push.
