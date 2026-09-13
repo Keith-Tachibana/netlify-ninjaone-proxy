@@ -100,8 +100,9 @@ exports.handler = async (event) => {
     };
 
     if (['POST', 'PATCH', 'PUT'].includes(event.httpMethod)) {
-      init.headers['Content-Type'] = 'application/json';
-      init.body = event.body;
+      const incomingContentType = event.headers['content-type'] || event.headers['Content-Type'];
+      init.headers['Content-Type'] = incomingContentType || 'application/json';
+      init.body = event.isBase64Encoded ? Buffer.from(event.body, 'base64') : event.body;
     }
 
     const ninjaResponse = await fetch(url.toString(), init);
