@@ -35,6 +35,32 @@ Environment variables** and add the same five values (`NINJA_CLIENT_ID`,
 `NINJA_CLIENT_SECRET`, `NINJA_INSTANCE`, `ALLOWED_ORIGIN`,
 `PROXY_SHARED_KEY`) there too.
 
+## One-time user-context login (needed for posting comments)
+
+Reads (tickets, boards, comments list) work fine under the app's client
+credentials. Writes — specifically posting a comment — require a token
+tied to an actual logged-in NinjaOne user instead. This is a one-time
+setup per environment:
+
+1. On the NinjaOne app you registered, add **Authorization Code** as an
+   additional allowed grant type (keep Client Credentials too — both can
+   be enabled on the same app). Set the redirect URI to your deployed
+   proxy's callback: `https://<your-site>.netlify.app/.netlify/functions/oauth-callback`.
+2. Add `NINJA_REDIRECT_URI` to your environment variables (both `.env`
+   locally and the Netlify UI for production) with that same URL.
+3. Deploy the proxy so `ninja-login` and `oauth-callback` are live.
+4. Visit `https://<your-site>.netlify.app/.netlify/functions/ninja-login`
+   in a browser, sign into NinjaOne, and approve access. You'll land on
+   the callback page showing a refresh token.
+5. Copy that value into your environment variables as
+   `NINJA_REFRESH_TOKEN`, then redeploy so the running function picks it up.
+
+Whoever does step 4 is, in effect, the identity comments will be posted
+as — this is best done by a real technician account, not a shared/generic
+login. If comment-posting ever starts failing with an auth error after
+working previously, the refresh token may have been revoked or rotated —
+redo steps 4–5 to get a fresh one.
+
 ## Deploy
 
 ```
