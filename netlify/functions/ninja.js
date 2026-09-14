@@ -3,6 +3,11 @@
 let cachedToken = null;
 let tokenExpiresAt = 0;
 
+// Separate cache for the user-context token (needed for write operations
+// like posting comments — NinjaOne rejects those under client_credentials).
+let cachedUserToken = null;
+let userTokenExpiresAt = 0;
+
 // Only these NinjaOne path prefixes can be reached through this proxy.
 // Widen deliberately as you need more of the API — keep the check itself.
 const ALLOWED_PATH_PREFIXES = ['/v2/ticketing/'];
@@ -44,6 +49,48 @@ function isPathAllowed(path) {
   return ALLOWED_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
+async function getUserContextAccessToken() {
+  const now = Date.now();
+  if (cachedUserToken && now < userTokenExpiresAt - 30000) {
+    return cachedUserToken;
+  }
+
+  const instance = process.env.NINJA_INSTANCE;
+  const tokenUrl = `https://${instance}/ws/oauth/token`;
+
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    refresh_token: process.env.NINJA_REFRESH_TOKEN,
+    client_id: process.env.NINJA_CLIENT_ID,
+    client_secret: process.env.NINJA_CLIENT_SECRET
+  });
+
+  const response = await fetch(tokenUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString()
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`NinjaOne user-context token refresh failed (${response.status}): ${text}`);
+  }
+
+  const data = await response.json();
+  cachedUserToken = data.access_token;
+  userTokenExpiresAt = now + data.expires_in * 1000;
+
+  // Some OAuth providers rotate the refresh token on every use. We can't
+  // persist a new value back into env vars from inside a function, so if
+  // this ever happens, log it — a future 400 on this call likely means the
+  // stored NINJA_REFRESH_TOKEN needs updating via the login flow again.
+  if (data.refresh_token && data.refresh_token !== process.env.NINJA_REFRESH_TOKEN) {
+    console.warn('NinjaOne issued a new refresh_token. If auth starts failing, redo the login flow to get a current one.');
+  }
+
+  return cachedUserToken;
+}
+
 function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': process.env.ALLOWED_ORIGIN || '',
@@ -82,11 +129,13 @@ exports.handler = async (event) => {
   }
 
   try {
-    const token = await getAccessToken();
+    const token = params.authMode === 'user'
+      ? await getUserContextAccessToken()
+      : await getAccessToken();
     const url = new URL(`https://${process.env.NINJA_INSTANCE}${targetPath}`);
 
     for (const [key, value] of Object.entries(params)) {
-      if (key !== 'path') {
+      if (key !== 'path' && key !== 'authMode') {
         url.searchParams.set(key, value);
       }
     }
