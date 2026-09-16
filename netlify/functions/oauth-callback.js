@@ -1,7 +1,9 @@
-// NinjaOne redirects here after you approve the login. We exchange the code
-// for tokens and display the refresh_token so you can copy it into your
-// Netlify environment variables as NINJA_REFRESH_TOKEN — this is a one-time
-// manual step since a serverless function can't update its own site config.
+const { getStore } = require('@netlify/blobs');
+
+// NinjaOne redirects here after a person approves the login. We exchange
+// the code for tokens and store the refresh token in Netlify Blobs, keyed
+// by their email (decoded from the state parameter) — no manual copy-paste
+// into environment variables needed anymore.
 exports.handler = async (event) => {
   const params = event.queryStringParameters || {};
 
@@ -13,8 +15,16 @@ exports.handler = async (event) => {
     };
   }
 
-  if (!params.code) {
-    return { statusCode: 400, headers: { 'Content-Type': 'text/plain' }, body: 'Missing code parameter.' };
+  if (!params.code || !params.state) {
+    return { statusCode: 400, headers: { 'Content-Type': 'text/plain' }, body: 'Missing code or state parameter.' };
+  }
+
+  let email;
+  try {
+    const decoded = JSON.parse(Buffer.from(params.state, 'base64').toString('utf8'));
+    email = decoded.email;
+  } catch (err) {
+    return { statusCode: 400, headers: { 'Content-Type': 'text/plain' }, body: 'Invalid state parameter.' };
   }
 
   const instance = process.env.NINJA_INSTANCE;
@@ -53,13 +63,16 @@ exports.handler = async (event) => {
       };
     }
 
+    const store = getStore('ninja-user-tokens');
+    await store.setJSON(email, { refreshToken: data.refresh_token, updatedAt: Date.now() });
+
     return {
       statusCode: 200,
-      headers: { 'Content-Type': 'text/plain' },
-      body:
-        'Login succeeded. Copy the value below into your Netlify site\'s environment variables ' +
-        'as NINJA_REFRESH_TOKEN (Site configuration > Environment variables), then redeploy:\n\n' +
-        data.refresh_token
+      headers: { 'Content-Type': 'text/html' },
+      body: `<html><body style="font-family: sans-serif; padding: 24px;">
+        <p>You're connected as <strong>${email}</strong>.</p>
+        <p>You can close this tab and go back to SharePoint — comments you post will now show up under your name.</p>
+      </body></html>`
     };
   } catch (err) {
     return { statusCode: 502, headers: { 'Content-Type': 'text/plain' }, body: `Error: ${err.message}` };

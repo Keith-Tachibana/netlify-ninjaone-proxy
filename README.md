@@ -35,12 +35,16 @@ Environment variables** and add the same five values (`NINJA_CLIENT_ID`,
 `NINJA_CLIENT_SECRET`, `NINJA_INSTANCE`, `ALLOWED_ORIGIN`,
 `PROXY_SHARED_KEY`) there too.
 
-## One-time user-context login (needed for posting comments)
+## User-context login (needed for posting comments)
 
 Reads (tickets, boards, comments list) work fine under the app's client
 credentials. Writes — specifically posting a comment — require a token
-tied to an actual logged-in NinjaOne user instead. This is a one-time
-setup per environment:
+tied to an actual logged-in NinjaOne user instead, and each person's
+comments post under *their own* identity, not a shared one. This uses
+Netlify Blobs to store each person's refresh token, keyed by their email —
+no manual copy-pasting into environment variables.
+
+**One-time environment setup:**
 
 1. On the NinjaOne app you registered, add **Authorization Code** as an
    additional allowed grant type (keep Client Credentials too — both can
@@ -49,17 +53,19 @@ setup per environment:
 2. Add `NINJA_REDIRECT_URI` to your environment variables (both `.env`
    locally and the Netlify UI for production) with that same URL.
 3. Deploy the proxy so `ninja-login` and `oauth-callback` are live.
-4. Visit `https://<your-site>.netlify.app/.netlify/functions/ninja-login`
-   in a browser, sign into NinjaOne, and approve access. You'll land on
-   the callback page showing a refresh token.
-5. Copy that value into your environment variables as
-   `NINJA_REFRESH_TOKEN`, then redeploy so the running function picks it up.
 
-Whoever does step 4 is, in effect, the identity comments will be posted
-as — this is best done by a real technician account, not a shared/generic
-login. If comment-posting ever starts failing with an auth error after
-working previously, the refresh token may have been revoked or rotated —
-redo steps 4–5 to get a fresh one.
+**What each person does (built into the web part):**
+
+The first time someone tries to post a comment without having connected
+their account, the ticket detail view shows a "Connect your account" link
+instead of the comment box. Clicking it opens NinjaOne's login in a new
+tab; after they sign in and approve access, their refresh token is stored
+automatically and they can go back and post normally — this only needs to
+happen once per person, unless NinjaOne later revokes their access.
+
+Netlify Blobs works automatically in both `netlify dev` and production —
+no separate account or setup needed beyond having the `@netlify/blobs`
+dependency installed (`npm install` picks it up from `package.json`).
 
 ## Deploy
 
@@ -68,7 +74,7 @@ netlify deploy --prod --no-build
 ```
 
 `--no-build` skips Netlify's default build step, which is correct here —
-there's nothing to compile or bundle, just the function to upload.
+there's nothing to compile or bundle, just the functions to upload.
 
 Or connect this folder to a Git repo in the Netlify UI for automatic
 deploys on every push.
@@ -83,9 +89,8 @@ PATCH https://<your-site>.netlify.app/.netlify/functions/ninja?path=/v2/ticketin
 
 Every call needs the `x-proxy-key` header. The SPFx web part is already
 set up to send it — just put the site URL + `/.netlify/functions/ninja`
-in the web part's "Azure Function base URL" property (the label's a
-leftover name, it just means "proxy base URL" now) and your
-`PROXY_SHARED_KEY` value in "Function key".
+in the web part's "Proxy base URL" property and your `PROXY_SHARED_KEY`
+value in "Proxy shared key".
 
 ## Locking it down further
 
@@ -95,3 +100,6 @@ leftover name, it just means "proxy base URL" now) and your
   and updating the web part's property to match.
 - The `ALLOWED_ORIGIN` check in code is a second layer — Netlify doesn't
   have a separate CORS allowlist setting the way Azure does.
+- If someone's NinjaOne access is revoked, their stored refresh token will
+  start failing — they'll see the "Connect your account" prompt again
+  automatically and can redo the one-time login.

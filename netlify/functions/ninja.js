@@ -1,12 +1,22 @@
+const { getStore } = require('@netlify/blobs');
+
 // Simple in-memory token cache — good enough for a single warm instance;
 // a cold start just means one extra token request.
 let cachedToken = null;
 let tokenExpiresAt = 0;
 
-// Separate cache for the user-context token (needed for write operations
-// like posting comments — NinjaOne rejects those under client_credentials).
-let cachedUserToken = null;
-let userTokenExpiresAt = 0;
+// Per-user access token cache (email -> {token, expiresAt}) — each person
+// who's connected their NinjaOne account gets their own cached token.
+const userTokenCache = new Map();
+
+// Thrown for anything the caller should be able to distinguish and react to
+// (e.g. showing a "connect your account" prompt) rather than a generic failure.
+class UserContextError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+  }
+}
 
 // Only these NinjaOne path prefixes can be reached through this proxy.
 // Widen deliberately as you need more of the API — keep the check itself.
@@ -49,10 +59,22 @@ function isPathAllowed(path) {
   return ALLOWED_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
-async function getUserContextAccessToken() {
+async function getUserContextAccessToken(userEmail) {
+  if (!userEmail) {
+    throw new UserContextError('missing_user', 'No user email was provided for this request.');
+  }
+
   const now = Date.now();
-  if (cachedUserToken && now < userTokenExpiresAt - 30000) {
-    return cachedUserToken;
+  const cached = userTokenCache.get(userEmail);
+  if (cached && now < cached.expiresAt - 30000) {
+    return cached.token;
+  }
+
+  const store = getStore('ninja-user-tokens');
+  const record = await store.get(userEmail, { type: 'json' });
+
+  if (!record || !record.refreshToken) {
+    throw new UserContextError('not_connected', 'This user has not connected their NinjaOne account yet.');
   }
 
   const instance = process.env.NINJA_INSTANCE;
@@ -60,7 +82,7 @@ async function getUserContextAccessToken() {
 
   const body = new URLSearchParams({
     grant_type: 'refresh_token',
-    refresh_token: process.env.NINJA_REFRESH_TOKEN,
+    refresh_token: record.refreshToken,
     client_id: process.env.NINJA_CLIENT_ID,
     client_secret: process.env.NINJA_CLIENT_SECRET
   });
@@ -72,23 +94,20 @@ async function getUserContextAccessToken() {
   });
 
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`NinjaOne user-context token refresh failed (${response.status}): ${text}`);
+    // Most likely the stored refresh token was revoked or expired.
+    throw new UserContextError('reconnect_required', 'Your NinjaOne connection has expired — please reconnect.');
   }
 
   const data = await response.json();
-  cachedUserToken = data.access_token;
-  userTokenExpiresAt = now + data.expires_in * 1000;
+  userTokenCache.set(userEmail, { token: data.access_token, expiresAt: now + data.expires_in * 1000 });
 
-  // Some OAuth providers rotate the refresh token on every use. We can't
-  // persist a new value back into env vars from inside a function, so if
-  // this ever happens, log it — a future 400 on this call likely means the
-  // stored NINJA_REFRESH_TOKEN needs updating via the login flow again.
-  if (data.refresh_token && data.refresh_token !== process.env.NINJA_REFRESH_TOKEN) {
-    console.warn('NinjaOne issued a new refresh_token. If auth starts failing, redo the login flow to get a current one.');
+  // If NinjaOne rotates refresh tokens, persist the new one so future calls
+  // keep working — this is exactly what env-var storage couldn't do.
+  if (data.refresh_token && data.refresh_token !== record.refreshToken) {
+    await store.setJSON(userEmail, { refreshToken: data.refresh_token, updatedAt: now });
   }
 
-  return cachedUserToken;
+  return data.access_token;
 }
 
 function corsHeaders() {
@@ -130,12 +149,12 @@ exports.handler = async (event) => {
 
   try {
     const token = params.authMode === 'user'
-      ? await getUserContextAccessToken()
+      ? await getUserContextAccessToken(params.userEmail)
       : await getAccessToken();
     const url = new URL(`https://${process.env.NINJA_INSTANCE}${targetPath}`);
 
     for (const [key, value] of Object.entries(params)) {
-      if (key !== 'path' && key !== 'authMode') {
+      if (key !== 'path' && key !== 'authMode' && key !== 'userEmail') {
         url.searchParams.set(key, value);
       }
     }
@@ -166,6 +185,13 @@ exports.handler = async (event) => {
       body: JSON.stringify(typeof payload === 'string' ? { raw: payload } : payload)
     };
   } catch (err) {
+    if (err instanceof UserContextError) {
+      return {
+        statusCode: 401,
+        headers: corsHeaders(),
+        body: JSON.stringify({ error: err.code, message: err.message })
+      };
+    }
     return {
       statusCode: 502,
       headers: corsHeaders(),
