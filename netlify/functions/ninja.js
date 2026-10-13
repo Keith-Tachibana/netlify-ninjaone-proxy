@@ -1,4 +1,4 @@
-const { getStore } = require('@netlify/blobs');
+const { getStore, connectLambda } = require('@netlify/blobs');
 
 // Simple in-memory token cache — good enough for a single warm instance;
 // a cold start just means one extra token request.
@@ -123,6 +123,10 @@ function corsHeaders() {
 // with header x-proxy-key: <PROXY_SHARED_KEY>. Netlify has no built-in
 // per-function key like Azure does, so this header is our own auth check.
 exports.handler = async (event) => {
+  // Classic (Lambda-style) handlers must hand the event to Blobs so it can
+  // pick up the site credentials; without this getStore() throws.
+  connectLambda(event);
+
   if (event.httpMethod === 'OPTIONS') {
     return { statusCode: 204, headers: corsHeaders(), body: '' };
   }

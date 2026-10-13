@@ -1,10 +1,11 @@
-const { getStore } = require('@netlify/blobs');
+const { getStore, connectLambda } = require('@netlify/blobs');
 
 // NinjaOne redirects here after a person approves the login. We exchange
 // the code for tokens and store the refresh token in Netlify Blobs, keyed
 // by their email (decoded from the state parameter) — no manual copy-paste
 // into environment variables needed anymore.
 exports.handler = async (event) => {
+  connectLambda(event);
   const params = event.queryStringParameters || {};
 
   if (params.error) {

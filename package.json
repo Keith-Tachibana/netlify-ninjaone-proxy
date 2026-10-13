@@ -4,6 +4,6 @@
   "private": true,
   "description": "Netlify Functions proxy between SharePoint and the NinjaOne ticketing API",
   "dependencies": {
-    "@netlify/blobs": "^8.1.0"
+    "@netlify/blobs": "^11.1.4"
   }
 }
